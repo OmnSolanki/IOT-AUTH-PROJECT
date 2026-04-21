@@ -136,11 +136,19 @@ function PasswordPanel({ onSuccess, onFail }) {
 }
 
 function QRPanel({ onSuccess, onFail }) {
-  const [qrCode] = useState(() => Math.floor(100000 + Math.random() * 900000).toString());
+  const [qrCode, setQrCode] = useState(null);
   const [timeLeft, setTimeLeft] = useState(60);
   const [input, setInput] = useState("");
   const [status, setStatus] = useState(null);
   const [expired, setExpired] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`${awsConfig.apiUrl}/qr/generate`, { method: "POST" })
+      .then(r => r.json())
+      .then(data => { setQrCode(data.code); setLoading(false); })
+      .catch(() => { setStatus({ type: "error", msg: "✗ Failed to generate QR code" }); setLoading(false); });
+  }, []);
 
   useEffect(() => {
     if (timeLeft <= 0) { setExpired(true); return; }
@@ -148,13 +156,24 @@ function QRPanel({ onSuccess, onFail }) {
     return () => clearTimeout(t);
   }, [timeLeft]);
 
-  const handle = () => {
-    if (expired) { setStatus({ type: "error", msg: "✗ Code expired — refresh page for new code" }); return; }
-    if (input === qrCode) {
-      setStatus({ type: "success", msg: "✓ QR code validated" });
-      onSuccess("qr");
-    } else {
-      setStatus({ type: "error", msg: "✗ Invalid code" });
+  const handle = async () => {
+    if (expired) { setStatus({ type: "error", msg: "✗ Code expired — refresh page" }); return; }
+    try {
+      const res = await fetch(`${awsConfig.apiUrl}/qr/validate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: input }),
+      });
+      const data = await res.json();
+      if (data.valid) {
+        setStatus({ type: "success", msg: "✓ QR code validated" });
+        onSuccess("qr");
+      } else {
+        setStatus({ type: "error", msg: `✗ ${data.message}` });
+        onFail("qr");
+      }
+    } catch {
+      setStatus({ type: "error", msg: "✗ Validation failed" });
       onFail("qr");
     }
   };
@@ -165,14 +184,17 @@ function QRPanel({ onSuccess, onFail }) {
       <h2>QR Code Pairing</h2>
       <p>Scan QR → enter 6-digit code. Code stored in DynamoDB with 60s TTL, then auto-deleted.</p>
       <div className="qr-wrap">
-        <div className="qr-box"><QRCode value={qrCode} size={140} /></div>
+        <div className="qr-box">
+          {loading ? <div style={{width:140,height:140,display:'flex',alignItems:'center',justifyContent:'center'}}>Loading...</div>
+           : qrCode ? <QRCode value={qrCode} size={140} /> : null}
+        </div>
         <div className="qr-timer">Expires in <span>{timeLeft}s</span></div>
       </div>
       <div className="field">
         <label>Enter 6-digit code (simulate scan)</label>
         <input placeholder="------" maxLength={6} value={input} onChange={e => setInput(e.target.value)} />
       </div>
-      <button className="btn btn-primary" onClick={handle} disabled={expired}>
+      <button className="btn btn-primary" onClick={handle} disabled={expired || loading}>
         {expired ? "Code Expired" : "Validate Code"}
       </button>
       {status && <div className={`status ${status.type}`}>{status.msg}</div>}
